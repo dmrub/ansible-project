@@ -1,0 +1,56 @@
+---
+- name: Debug | Symlink
+  debug:
+    var: symlink_arg
+
+- name: Check symlink structure
+  assert:
+    that:
+      - symlink_arg.repo_src is defined
+      - symlink_arg.repo_src is string
+      - symlink_arg.proj_dest is defined
+      - symlink_arg.proj_dest is string
+    fail_msg: >-
+      symlink {{ symlink_arg }} structure should
+      contain source and target keys with strings as values
+
+- name: Set symlink source and target
+  set_fact:
+    symlink_src: "{{ repo_dir ~ '/' ~ symlink_arg.repo_src }}"
+    symlink_dest: "{{ (manifest_install_dir ~ '/' ~ symlink_arg.proj_dest) | abspath }}"
+
+- name: Check that the symlink dest is not outside the manifest installation directory
+  assert:
+    that: "'..' is not in _rel_symlink_dest"
+    fail_msg: >-
+      Symlink dest directory {{ symlink_dest | abspath }} is
+      outside of the manifest installation directory {{ manifest_install_dir | realpath }},
+      relative path is {{ _rel_symlink_dest }}
+  vars:
+    _rel_symlink_dest: "{{ symlink_dest | abspath | relpath(manifest_install_dir | realpath) }}"
+
+- name: Check that the symlink src is not outside the manifest installation directory
+  assert:
+    that: "'..' is not in _rel_symlink_src"
+    fail_msg: >-
+      Symlink src directory {{ symlink_src | realpath }} is
+      outside of the manifest installation directory {{ manifest_install_dir | realpath }},
+      relative path is {{ _rel_symlink_src }}
+  vars:
+    _rel_symlink_src: "{{ symlink_src | realpath | relpath(manifest_install_dir | realpath) }}"
+
+- name: Create symlink parent directory
+  file:
+    path: "{{ symlink_dest | dirname }}"
+    state: directory
+
+- name: Print symlink to create
+  debug:
+    msg: "Create symlink {{ symlink_src | relpath(symlink_dest | dirname) }} -> {{ symlink_dest }}"
+
+- name: "Create symlink {{ symlink_arg.repo_src }} -> {{ symlink_arg.proj_dest }}"
+  file:
+    force: yes
+    src: "{{ symlink_src | relpath(symlink_dest | dirname) }}"
+    dest: "{{ symlink_dest }}"
+    state: link

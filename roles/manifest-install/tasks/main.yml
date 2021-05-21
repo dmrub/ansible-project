@@ -1,0 +1,187 @@
+---
+# tasks file for manifest-install
+
+- name: Set manifest_file variable
+  set_fact:
+    manifest_file: "{{ project_root_dir }}/manifest.yml"
+  when:
+    - manifest_file is not defined
+    - project_root_dir is defined
+    - project_root_dir is string
+    - project_root_dir | length > 0
+
+- name: Set manifest_install_dir var
+  set_fact:
+    manifest_install_dir: "{{ project_root_dir }}"
+  when:
+    - manifest_install_dir is not defined
+    - project_root_dir is defined
+    - project_root_dir is string
+    - project_root_dir | length > 0
+
+- name: Set default_manifest_file var
+  set_fact:
+    default_manifest_file: "{{ manifest_install_dir }}/manifest.yml"
+
+- name: Check manifest_file variable
+  assert:
+    that:
+      - manifest_file is defined
+      - manifest_file is string
+      - manifest_file | length > 0
+    fail_msg: "manifest_file variable must be a non-empty string"
+
+- name: Load manifest file
+  set_fact:
+    _manifest_data: "{{ (lookup('file', manifest_file) | from_yaml) }}"
+    _default_manifest_loaded: "{{ manifest_file | samefile(default_manifest_file) }}"
+
+- name: Load default manifest
+  set_fact:
+    _default_manifest_data: >-
+      {{ _manifest_data if
+         _default_manifest_loaded else
+         (
+           (lookup('file', default_manifest_file) | from_yaml)
+           if (default_manifest_file | isfile) else
+           ({'repos':[]})
+         )
+      }}
+
+- name: Update default manifest with the loaded manifest
+  local_action:
+    module: python_script
+    script_args:
+      loaded_manifest_file: "{{ manifest_file }}"
+      loaded_manifest_data: "{{ _manifest_data }}"
+      default_manifest_file: "{{ default_manifest_file }}"
+      default_manifest_data: "{{ _default_manifest_data }}"
+    script: !unsafe |
+      import os.path
+      from ansible.module_utils.common.validation import check_type_dict, check_type_list, check_type_str
+
+      def is_dict(value):
+        try:
+          check_type_dict(value)
+        except TypeError:
+          return False
+        return True
+
+      def is_list(value):
+          try:
+            check_type_list(value)
+          except TypeError:
+            return False
+          return True
+
+      def is_str(value):
+          try:
+            check_type_str(value, allow_conversion=False)
+          except TypeError:
+            return False
+          return True
+
+      def check_manifest(manifest, manifest_file):
+        if not is_dict(manifest):
+          module.fail_json(msg='manifest is not a dictionary in the file {}'.format(manifest_file), **result)
+        repos = manifest.get('repos')
+        if not is_list(repos):
+          module.fail_json(msg='repos is not a list in the file {}'.format(manifest_file), **result)
+        clone_dir = manifest.get('clone_dir')
+        if clone_dir is not None and not is_str(clone_dir):
+          module.fail_json(msg='clone_dir is not a string in the file {}'.format(manifest_file), **result)
+
+      def get_manifest_url_set(manifest, manifest_file):
+        repos = manifest.get('repos')
+        urls = set()
+        for repo in repos:
+          url = repo.get('url')
+          if not is_str(url):
+            module.fail_json(msg='repository without url in the file {}'.format(manifest_file), **result)
+          urls.add(url)
+        return urls
+
+      loaded_manifest_file = module.params['script_args']['loaded_manifest_file']
+      loaded_manifest_data = module.params['script_args']['loaded_manifest_data']
+      default_manifest_file = module.params['script_args']['default_manifest_file']
+      default_manifest_data = module.params['script_args']['default_manifest_data']
+      check_manifest(loaded_manifest_data, loaded_manifest_file)
+      check_manifest(default_manifest_data, default_manifest_file)
+
+      loaded_manifest_urls = get_manifest_url_set(loaded_manifest_data, loaded_manifest_file)
+      default_manifest_urls = get_manifest_url_set(default_manifest_data, default_manifest_file)
+      added_manifest_urls = loaded_manifest_urls.difference(default_manifest_urls)
+
+      updated_manifest_data = default_manifest_data.copy()
+      updated_manifest_data_repos = updated_manifest_data.get('repos')
+      if updated_manifest_data_repos is None:
+        updated_manifest_data_repos = []
+        updated_manifest_data['repos'] = updated_manifest_data_repos
+      changed = False
+      for repo in loaded_manifest_data.get('repos', []):
+        repo_url = repo.get('url')
+        if repo_url in added_manifest_urls:
+          updated_manifest_data_repos.append(repo)
+          changed = True
+        elif repo_url in default_manifest_urls:
+          for index, updated_repo in enumerate(updated_manifest_data_repos):
+            updated_repo_url = updated_repo.get('url')
+            if updated_repo_url == repo_url and updated_repo != repo:
+              updated_manifest_data_repos[index] = repo
+              changed = True
+
+      if changed:
+        result['manifest_data'] = updated_manifest_data
+        result['changed'] = True
+      else:
+        result['manifest_data'] = default_manifest_data
+        result['changed'] = False
+  register: _manifest_result
+
+- name: Write default manifest
+  copy:
+    force: true
+    content: >-
+      {{
+        _manifest_result.manifest_data | to_nice_yaml(indent=4, explicit_start=True, explicit_end=True)
+      }}
+    dest: "{{ default_manifest_file }}"
+  when: _manifest_result.changed
+
+# - name: Debug
+#   debug:
+#     var: _manifest_result
+
+# - name: STOP
+#   fail:
+#     msg: STOP
+#   when: true
+
+- name: Set path where to clone repositories
+  set_fact:
+    manifest_clone_dir: "{{ _manifest_data.clone_dir | default(manifest_install_dir) | realpath }}"
+
+- name: Check that the clone directory is not outside the manifest installation directory
+  assert:
+    that: "'..' is not in _rel_clone_dir"
+    fail_msg: >-
+      Clone directory {{ manifest_clone_dir | realpath }} is
+      outside of the manifest installation directory {{ manifest_install_dir | realpath }},
+      relative path is {{ _rel_clone_dir }}
+  vars:
+    _rel_clone_dir: "{{ manifest_clone_dir | realpath | relpath(manifest_install_dir | realpath) }}"
+
+- name: Create manifest clone_dir directory
+  file:
+    path: "{{ manifest_clone_dir }}"
+    state: directory
+
+- name: Debug
+  debug:
+    var: _manifest_data
+
+- name: Install repo
+  include_tasks: "install-repo.yml"
+  vars:
+    repo_arg: "{{ item }}"
+  loop: "{{ _manifest_data.repos }}"

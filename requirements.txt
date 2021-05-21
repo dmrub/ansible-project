@@ -1,0 +1,10 @@
+ansible==2.9.21
+netaddr
+pyyaml
+jmespath
+selinux
+paramiko
+requests
+yamllint
+ansible-lint[yamllint]
+marshmallow==3.10.0

@@ -1,0 +1,10 @@
+---
+- name: Install manifest
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  tasks:
+
+    - name: Install manifest
+      include_role:
+        name: manifest-install

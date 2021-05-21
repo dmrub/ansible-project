@@ -1,0 +1,56 @@
+---
+- name: Debug | Copy
+  debug:
+    var: copy_arg
+
+- name: Check copy structure
+  assert:
+    that:
+      - copy_arg.repo_src is defined
+      - copy_arg.repo_src is string
+      - copy_arg.proj_dest is defined
+      - copy_arg.proj_dest is string
+    fail_msg: >-
+      copy {{ copy_arg }} structure should
+      contain source and target keys with strings as values
+
+- name: Set copy source and target
+  set_fact:
+    copy_src: "{{ repo_dir ~ '/' ~ copy_arg.repo_src }}"
+    copy_dest: "{{ (manifest_install_dir ~ '/' ~ copy_arg.proj_dest) | abspath }}"
+
+- name: Check that the copy dest is not outside the manifest installation directory
+  assert:
+    that: "'..' is not in _rel_copy_dest"
+    fail_msg: >-
+      copy dest directory {{ copy_dest | abspath }} is
+      outside of the manifest installation directory {{ manifest_install_dir | realpath }},
+      relative path is {{ _rel_copy_dest }}
+  vars:
+    _rel_copy_dest: "{{ copy_dest | abspath | relpath(manifest_install_dir | realpath) }}"
+
+- name: Check that the copy src is not outside the manifest installation directory
+  assert:
+    that: "'..' is not in _rel_copy_src"
+    fail_msg: >-
+      copy src directory {{ copy_src | realpath }} is
+      outside of the manifest installation directory {{ manifest_install_dir | realpath }},
+      relative path is {{ _rel_copy_src }}
+  vars:
+    _rel_copy_src: "{{ copy_src | realpath | relpath(manifest_install_dir | realpath) }}"
+
+- name: Create copy parent directory
+  file:
+    path: "{{ copy_dest | dirname }}"
+    state: directory
+
+- name: Print copy to create
+  debug:
+    msg: "Copy {{ copy_src }} -> {{ copy_dest }}"
+
+- name: "Copy {{ copy_arg.repo_src }} -> {{ copy_arg.proj_dest }}"
+  copy:
+    force: yes
+    remote_src: yes
+    src: "{{ copy_src }}"
+    dest: "{{ copy_dest | abspath }}"

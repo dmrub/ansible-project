@@ -1,0 +1,64 @@
+---
+- name: Debug | Print add_roles_path_arg
+  debug:
+    var: add_roles_path_arg
+
+- name: Set path to ansible config file
+  set_fact:
+    _project_ansible_config_file: "{{ ansible_config_file | default(project_ansible_config_file) }}"
+    _add_roles_path: "{{ [add_roles_path_arg] if add_roles_path_arg is string else add_roles_path_arg }}"
+    _abs_roles_path: []
+    _add_rel_roles_path: []
+
+- name: Set _abs_roles_path and _add_rel_roles_path
+  set_fact:
+    _abs_roles_path: "{{ _abs_roles_path + [_abs_roles_path_item] }}"
+    _add_rel_roles_path: "{{ _add_rel_roles_path + [_add_rel_roles_path_item] }}"
+  vars:
+    _abs_roles_path_item: "{{ (repo_dir ~ '/' ~ _add_roles_path_item) | abspath }}"
+    _add_rel_roles_path_item: "{{ _abs_roles_path_item | relpath(_project_ansible_config_file | realpath | dirname) }}"
+  loop: "{{ _add_roles_path }}"
+  loop_control:
+    loop_var: _add_roles_path_item
+
+- name: Check add_roles_path list
+  assert:
+    that: "'..' is not in _rel_roles_path_item"
+    fail_msg: >-
+      directory {{ _abs_roles_path_item }} is
+      outside of the repository directory {{ repo_dir | realpath }},
+      relative path is {{ _rel_roles_path_item }}
+  vars:
+    _rel_roles_path_item: >-
+      {{
+        _abs_roles_path_item | realpath | relpath(repo_dir | realpath)
+      }}
+  loop: "{{ _abs_roles_path }}"
+  loop_control:
+    loop_var: _abs_roles_path_item
+
+- name: Read ansible configuration
+  read_ini:
+    path: "{{ _project_ansible_config_file }}"
+    section: "defaults"
+  register: _ansible_defaults
+  ignore_errors: true
+
+- name: Update roles path
+  set_fact:
+    _roles_path: >-
+      {{
+        (_ansible_defaults.value.roles_path | default('')).split(':') |
+        union(_add_rel_roles_path)
+      }}
+
+- name: Debug | Print _roles_path
+  debug:
+    var: _roles_path
+
+- name: Write ansible configuration
+  ini_file:
+    path: "{{ _project_ansible_config_file }}"
+    section: "defaults"
+    option: roles_path
+    value: "{{ _roles_path | join(':') }}"

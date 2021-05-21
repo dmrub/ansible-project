@@ -1,0 +1,4 @@
+---
+# defaults file for k8s-init-cluster-dir
+git_force_update: false
+manifest_all_force_update: false

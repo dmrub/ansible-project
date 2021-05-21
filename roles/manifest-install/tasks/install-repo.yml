@@ -1,0 +1,110 @@
+---
+- name: Debug | Repo
+  debug:
+    var: repo_arg
+
+- name: Set repo_dir
+  set_fact:
+    repo_dir: "{{ manifest_clone_dir ~ '/' ~ repo_arg.dest }}"
+
+- name: Check that the repo dest directory is not outside the manifest installation directory
+  assert:
+    that: "'..' is not in _rel_repo_dir"
+    fail_msg: >-
+      Clone directory {{ repo_dir | realpath }} is
+      outside of the manifest installation directory {{ manifest_install_dir | realpath }},
+      relative path is {{ _rel_repo_dir }}
+  vars:
+    _rel_repo_dir: "{{ manifest_clone_dir | realpath | relpath(manifest_install_dir | realpath) }}"
+
+- name: Set repo URL without credentials
+  set_fact:
+    _repo_url_without_cred: "{{ repo_arg.url | regex_replace('^(https?://)[^@]+@(.*)$', '\\1\\2') }}"
+
+- name: Print clone info
+  debug:
+    msg: "Clone repo {{ _repo_url_without_cred }} to directory {{ repo_dir }}"
+
+- name: Clone git repository
+  git:
+    repo: "{{ repo_arg.url }}"
+    dest: "{{ repo_dir }}"
+    version: "{{ repo_arg.branch | default('master') }}"
+    accept_hostkey: yes
+    force: "{{ (git_force_update | bool) or (manifest_all_force_update | bool) }}"
+    umask: "0002"
+
+- name: Ensure git url does not contain credentials
+  git_config:
+    name: remote.origin.url
+    value: "{{ _repo_url_without_cred }}"
+    scope: local
+    repo: "{{ repo_dir }}"
+  when: repo_arg.url is regex("^https?://[^@]+@")
+  no_log: true
+
+- name: Check repo.symlink structure
+  assert:
+    that:
+      - repo_arg.symlink is sequence
+      - repo_arg.symlink is not mapping
+      - repo_arg.symlink is not string
+    fail_msg: "Invalid symlink field in the manifest file {{ manifest_file }}"
+  when: repo_arg.symlink is defined
+
+- name: debug
+  debug:
+    var: repo_arg | attr('copy') | type_debug
+
+- name: Check repo.copy structure
+  assert:
+    that:
+      - repo_arg['copy'] is sequence
+      - repo_arg['copy'] is not mapping
+      - repo_arg['copy'] is not string
+    fail_msg: "Invalid copy field in the manifest file {{ manifest_file }}"
+  when: >-
+    ((repo_arg | attr('copy')) is defined) and
+    ('builtin' not in (repo_arg | attr('copy') | type_debug))
+
+- name: Set _repo_copy
+  set_fact:
+    _repo_copy: >-
+      {{
+        repo_arg['copy'] if
+        (((repo_arg | attr('copy')) is defined) and
+        ('builtin' not in (repo_arg | attr('copy') | type_debug)))
+        else []
+      }}
+
+- name: Make symlinks
+  include_tasks: "make-symlink.yml"
+  vars:
+    symlink_arg: "{{ symlink_item }}"
+  loop: "{{ repo_arg.symlink | default([]) }}"
+  loop_control:
+    loop_var: symlink_item
+
+- name: Make copies
+  include_tasks: "make-copy.yml"
+  vars:
+    copy_arg: "{{ copy_item }}"
+  loop: "{{ _repo_copy }}"
+  loop_control:
+    loop_var: copy_item
+
+- name: Check repo.add_roles_path structure
+  assert:
+    that: >-
+      (repo_arg['add_roles_path'] is sequence and
+       repo_arg['add_roles_path'] is not mapping and
+       repo_arg['add_roles_path'] is not string) or
+       repo_arg['add_roles_path'] is string
+    fail_msg: "Invalid add_roles_path field in the manifest file {{ manifest_file }}"
+  when: repo_arg['add_roles_path'] is defined
+
+- name: Add role paths
+  include_tasks: "add-roles-path.yml"
+  vars:
+    add_roles_path_arg: "{{ repo_arg['add_roles_path'] }}"
+  when: repo_arg['add_roles_path'] is defined
