@@ -53,6 +53,7 @@ get_distribution() {
     lsb_dist=""
     # Every system that we officially support has /etc/os-release
     if [ -r /etc/os-release ]; then
+        # shellcheck disable=SC1091
         lsb_dist="$(. /etc/os-release && echo "$ID")"
     fi
     # Returning an empty string here should be alright since the
@@ -183,6 +184,7 @@ install_dependencies() {
 
     centos | rhel)
         if [ -z "$dist_version" ] && [ -r /etc/os-release ]; then
+            # shellcheck disable=SC1091
             dist_version="$(. /etc/os-release && echo "$VERSION_ID")"
         fi
         ;;
@@ -192,6 +194,7 @@ install_dependencies() {
             dist_version="$(lsb_release --release | cut -f2)"
         fi
         if [ -z "$dist_version" ] && [ -r /etc/os-release ]; then
+            # shellcheck disable=SC1091
             dist_version="$(. /etc/os-release && echo "$VERSION_ID")"
         fi
         ;;
@@ -240,12 +243,54 @@ install_dependencies() {
         )
         ;;
     *)
-        if [ -z "$lsb_dist" ]; then
-            if is_darwin; then
-                fatal "Unsupported operating system 'macOS'"
+        if is_darwin; then
+            if ! command_exists brew; then
+                if is_dry_run; then
+                    # shellcheck disable=SC2016
+                    echo '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install.sh)"'
+                else
+                (
+                    set -x
+                    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install.sh)"
+                )
+                fi
             fi
+            if ! command_exists brew; then
+                fatal "Could not install brew"
+            fi
+            if is_dry_run; then
+                echo brew install bash
+                echo hash -r
+            else
+                (
+                    set -x
+                    brew install bash
+                    hash -r
+                )
+            fi
+            if ! command_exists sshpass; then
+                if is_dry_run; then
+                    echo 'curl -o sshpass-1.08.tar.gz -L  https://sourceforge.net/projects/sshpass/files/sshpass/1.08/sshpass-1.08.tar.gz'
+                    echo 'tar xvzf sshpass-1.08.tar.gz'
+                    echo 'cd sshpass-1.08'
+                    echo './configure'
+                    echo 'sudo make install'
+                    echo 'rm -rf sshpass-1.08'
+                else
+                    (
+                        set -x
+                        curl -o sshpass-1.08.tar.gz -L  https://sourceforge.net/projects/sshpass/files/sshpass/1.08/sshpass-1.08.tar.gz && \
+                            tar xvzf sshpass-1.08.tar.gz
+                        cd sshpass-1.08
+                        ./configure
+                        sudo make install
+                        rm -rf sshpass-1.08
+                    )
+                fi
+            fi
+        else
+            fatal "Unsupported distribution '$lsb_dist'"
         fi
-        fatal "Unsupported distribution '$lsb_dist'"
         ;;
     esac
 }
@@ -384,6 +429,9 @@ fi
 if is_dry_run; then
     echo . "$VENV_DIR/bin/activate"
     echo python3 -m pip install -r "$PROJ_DIR/requirements.txt"
+    if is_darwin; then
+        echo python3 -m pip install passlib
+    fi
     echo deactivate
 else
     (
@@ -391,6 +439,12 @@ else
         . "$VENV_DIR/bin/activate"
         set -x
         python3 -m pip install -r "$PROJ_DIR/requirements.txt"
+        set +x
+        if is_darwin; then
+            set -x
+            python3 -m pip install passlib
+            set +x
+        fi
     )
 fi
 
