@@ -270,12 +270,12 @@ if ! is-array CFG_ANSIBLE_INVENTORIES; then
     CFG_ANSIBLE_INVENTORIES=( )
 fi
 
-if ! is-array CFG_VAULT_FILES; then
-    CFG_VAULT_FILES=()
+if ! is-array CFG_ANSIBLE_VAULT_FILES; then
+    CFG_ANSIBLE_VAULT_FILES=()
 fi
 
-if ! is-array CFG_VARS_FILES; then
-    CFG_VARS_FILES=()
+if ! is-array CFG_ANSIBLE_VARS_FILES; then
+    CFG_ANSIBLE_VARS_FILES=()
 fi
 
 if ! is-array CFG_CONFIGURE_OPTS; then
@@ -333,12 +333,12 @@ add-extra-vars-to-opts() {
         --extra-vars "project_root_dir=$PROJ_DIR"
         --extra-vars "project_ansible_config_file=$CFG_ANSIBLE_CONFIG_FILE"
     )
-    for fn in "${CFG_VARS_FILES[@]}"; do
+    for fn in "${CFG_ANSIBLE_VARS_FILES[@]}"; do
         if [[ -e "$fn" ]]; then
             opts+=(--extra-vars @"$fn")
         fi
     done
-    for fn in "${CFG_VAULT_FILES[@]}"; do
+    for fn in "${CFG_ANSIBLE_VAULT_FILES[@]}"; do
         if [[ -e "$fn" ]]; then
             opts+=(--extra-vars @"$fn")
         fi
@@ -498,6 +498,14 @@ for var_name in ANSIBLE_PRIVATE_KEY_FILE ANSIBLE_VAULT_ENCRYPT_IDENTITY ANSIBLE_
 done
 if [[ -n "$CFG_ANSIBLE_CONFIG_FILE" ]]; then
     export ANSIBLE_CONFIG=$CFG_ANSIBLE_CONFIG_FILE
+fi
+
+if is-array CFG_VAULT_FILES; then
+    CFG_ANSIBLE_VAULT_FILES+=( "${CFG_VAULT_FILES[@]}" )
+fi
+
+if is-array CFG_VARS_FILES; then
+    CFG_ANSIBLE_VARS_FILES+=( "${CFG_VARS_FILES[@]}" )
 fi
 
 unset var_name cfg_var_name

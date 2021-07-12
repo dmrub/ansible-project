@@ -2,22 +2,25 @@
 
 """Ansible configurator"""
 
-import sys
+import collections.abc
+import collections.abc
+import getpass
 import logging
 import os.path
-import readline
-import random
-import string
-import yaml
 import pathlib
-import shlex
-import getpass
-import subprocess
-from dataclasses import dataclass, field
-from marshmallow import Schema, fields, post_load, post_dump  # type: ignore
-from typing import List, Optional, Any
-import collections.abc
 import pprint
+import random
+import readline
+import shlex
+import string
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from typing import Any
+from typing import Optional, Mapping, List
+
+import yaml
+from marshmallow import Schema, fields, post_load, post_dump  # type: ignore
 
 try:
     from yaml import CSafeLoader as Loader, CDumper as Dumper  # type: ignore
@@ -256,13 +259,13 @@ def backup_file(path):
         os.rename(rpath, bak_rpath)
 
 
-def dict_merge(a, b):
+def simple_dict_merge(a, b):
     c = {}
     for k, v in a.items():
         if k not in b:
             c[k] = v
         elif isinstance(v, collections.abc.Mapping) and isinstance(b[k], collections.abc.Mapping):
-            c[k] = dict_merge(v, b[k])
+            c[k] = simple_dict_merge(v, b[k])
         else:
             c[k] = b[k]
     for k, v in b.items():
@@ -290,7 +293,7 @@ def load_config_dict(filename, defaults=None):
         except Exception:  # pylint: disable=broad-except
             LOG.exception("Could not load configuration from file: %s", filename)
     if defaults:
-        config_dict = dict_merge(defaults, config_dict)
+        config_dict = simple_dict_merge(defaults, config_dict)
     return config_dict
 
 
@@ -361,6 +364,40 @@ class VaultId:
         return "VaultId({!r})".format(self.id)
 
 
+REPLACE_VARS_MERGE_ACTION = '$replace_vars'
+
+
+class AttrMerger:
+
+    def __init__(self, merge_options: Optional[Mapping[str, str]] = None):
+        self.merge_options = merge_options
+        self.replace_vars = set(merge_options.get(REPLACE_VARS_MERGE_ACTION, []))
+        self.cur_attr_name = ''
+        self.attr_name_stack = []
+
+    def begin_attr(self, name: str):
+        self.attr_name_stack.append(self.cur_attr_name)
+        self.cur_attr_name = self.cur_attr_name + '.' + name if self.cur_attr_name else name
+
+    def end_attr(self):
+        self.cur_attr_name = self.attr_name_stack.pop()
+
+    def merge_attr(self, this_obj, that_obj, attr_name: str):
+        self.begin_attr(attr_name)
+        do_replace_attr = self.cur_attr_name in self.replace_vars
+        if do_replace_attr:
+            setattr(this_obj, attr_name, getattr(that_obj, attr_name))
+        else:
+            this_value = getattr(this_obj, attr_name)
+            that_value = getattr(that_obj, attr_name)
+            if isinstance(this_value, collections.abc.Sequence) and \
+                    isinstance(that_value, collections.abc.Sequence):
+                setattr(this_obj, attr_name, list(this_value) + [item for item in that_value if item not in this_value])
+            else:
+                setattr(this_obj, attr_name, that_value)
+        self.end_attr()
+
+
 @dataclass
 class AnsibleConfig:
     config_file: Optional[pathlib.Path] = None
@@ -374,6 +411,16 @@ class AnsibleConfig:
     user: Optional[str] = None
     vault_encrypt_identity: Optional[str] = None
     log_path: Optional[pathlib.Path] = None
+
+    def merge(self, other: 'AnsibleConfig', attr_merger: AttrMerger):
+        self.config_file = other.config_file
+        for attr_name in ('inventories', 'vault_ids', 'vault_password_files',
+                          'user_scripts', 'vars_files', 'vault_files'):
+            attr_merger.merge_attr(self, other, attr_name)
+        self.private_key_file = other.private_key_file
+        self.user = other.user
+        self.vault_encrypt_identity = other.vault_encrypt_identity
+        self.log_path = other.log_path
 
 
 @dataclass
@@ -391,6 +438,12 @@ class ConfigContext:
 class MainConfig:
     ansible: AnsibleConfig = field(default_factory=lambda: AnsibleConfig())
     config_context: Optional[ConfigContext] = None
+
+    def merge(self, other: 'MainConfig', attr_merger: AttrMerger):
+        attr_merger.begin_attr('ansible')
+        self.ansible.merge(other.ansible, attr_merger)
+        attr_merger.end_attr()
+        self.config_context = other.config_context
 
 
 class PathField(fields.String):
@@ -661,8 +714,6 @@ class Configurator:
         self.debug_mode = debug_mode
         if config_files:
             config_dict = CONFIG_DEFAULTS
-            config_context = None
-            schema = None
 
             if len(config_files) == 1:
                 config_file = config_files[0]
@@ -672,26 +723,30 @@ class Configurator:
                 schema = MainConfigSchema()
                 schema.context = config_context
                 config_dict = load_config_dict(config_file, defaults=config_dict)
+                config_model = schema.load(config_dict)
+                self._config = config_model
 
             else:
+                merged_config_model = None
                 for config_file in config_files:
-                    # Disable model creation to be able to merge
-                    # multiple configuration files into a single one
                     config_context = ConfigContext(
                         config_file=pathlib.Path(os.path.realpath(config_file)),
-                        serialize_relative_paths=False,
-                        create_model=False,
+                        create_model=True,
                     )
                     schema = MainConfigSchema()
                     schema.context = config_context
                     config_dict = load_config_dict(config_file, defaults=config_dict)
+                    merge_options = {}
+                    # Get merge actions which starts with '$'
+                    for merge_action_key in [k for k in config_dict.keys() if k.startswith('$')]:
+                        merge_options[merge_action_key] = config_dict.pop(merge_action_key)
                     config_model = schema.load(config_dict)
-                    config_dict = schema.dump(config_model)
+                    if merged_config_model is None:
+                        merged_config_model = config_model
+                    else:
+                        merged_config_model.merge(config_model, AttrMerger(merge_options=merge_options))
 
-                config_context.create_model = True
-
-            config_model = schema.load(config_dict)
-            self._config = config_model
+                self._config = merged_config_model
         else:
             self._config = MainConfig()
 
