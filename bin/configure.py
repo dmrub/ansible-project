@@ -974,7 +974,7 @@ class Configurator:
 
         call_func = subprocess.check_call if check_call else subprocess.call
 
-        LOG.debug("Executing ansible-vault: %s", " ".join(cmd_args))
+        LOG.debug("Executing ansible-vault: %s", " ".join((str(arg) for arg in cmd_args)))
 
         stderr = sys.stderr if self.debug_mode else stderr
 
