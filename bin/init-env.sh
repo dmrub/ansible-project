@@ -270,6 +270,10 @@ if ! is-array CFG_ANSIBLE_INVENTORIES; then
     CFG_ANSIBLE_INVENTORIES=( )
 fi
 
+if ! is-array CFG_ANSIBLE_EXTRA_VARS; then
+    CFG_ANSIBLE_EXTRA_VARS=()
+fi
+
 if ! is-array CFG_ANSIBLE_VAULT_FILES; then
     CFG_ANSIBLE_VAULT_FILES=()
 fi
@@ -327,12 +331,17 @@ add-remote-user-to-opts() {
 }
 
 add-extra-vars-to-opts() {
-    local fn
+    local fn var
     # opts array is defined outside
     opts+=(
         --extra-vars "project_root_dir=$PROJ_DIR"
         --extra-vars "project_ansible_config_file=$CFG_ANSIBLE_CONFIG_FILE"
     )
+    for var in "${CFG_ANSIBLE_EXTRA_VARS[@]}"; do
+        if [[ -n "$var" ]]; then
+            opts+=(--extra-vars "$var")
+        fi
+    done
     for fn in "${CFG_ANSIBLE_VARS_FILES[@]}"; do
         if [[ -e "$fn" ]]; then
             opts+=(--extra-vars @"$fn")
