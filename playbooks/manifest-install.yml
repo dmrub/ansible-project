@@ -7,4 +7,4 @@
 
     - name: Install manifest
       include_role:
-        name: manifest-install
+        name: manifest_install
