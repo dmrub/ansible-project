@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-BIN_DIR=$( (cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P))
+BIN_DIR=$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 
 PROJ_DIR=$BIN_DIR/..
 
@@ -490,8 +490,8 @@ if is-true "$CFG_SHELL_CONFIG_ENABLED"; then
 
     eval "$CFG_SHELL_CONFIG"
 
-    if is-array CFG_USER_SCRIPTS; then
-        load-scripts "${CFG_USER_SCRIPTS[@]}"
+    if is-array CFG_ANSIBLE_USER_SCRIPTS; then
+        load-scripts "${CFG_ANSIBLE_USER_SCRIPTS[@]}"
     fi
 fi
 
