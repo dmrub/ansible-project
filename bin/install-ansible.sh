@@ -465,6 +465,8 @@ if [ -e "$PROJ_DIR/requirements.yml" ]; then
             set -x
             # shellcheck disable=SC2086
             ansible-galaxy collection install ${FORCE_INSTALL_ARG} -r "$PROJ_DIR/requirements.yml"
+            # shellcheck disable=SC2086
+            ansible-galaxy role install ${FORCE_INSTALL_ARG} -r "$PROJ_DIR/requirements.yml"
         )
     fi
 fi
