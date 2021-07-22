@@ -67,6 +67,12 @@ def to_realpath_list(value):
     return [os.path.realpath(p) for p in to_list(value) if p]
 
 
+def str_or_none(value) -> Optional[str]:
+    if value is None:
+        return value
+    return str(value)
+
+
 def none_to_empty_str(val):
     return "" if val is None else val
 
@@ -318,7 +324,7 @@ def save_config_dict(filename, config_dict, do_backup=False):
 
 
 class VaultId:
-    def __init__(self, vault_id=None, base_dir=None, label=None, source=None):
+    def __init__(self, vault_id=None, base_dir=None, label=None, source=None, apply_realpath=True):
         if vault_id is not None:
             if label is not None or source is not None:
                 raise ValueError("label and source arguments cannot be used together with vault_id")
@@ -331,8 +337,10 @@ class VaultId:
             if label is None:
                 raise ValueError("Neither vault_id nor label arguments are specified")
         self.label = label
-        if source and source != "prompt":
+        if source and source != "prompt" and apply_realpath:
             source = auto_realpath(source, base_dir=base_dir, force_abs_path=True)
+        else:
+            source = str(source)
         self.source = source
 
     def copy(self):
@@ -353,9 +361,14 @@ class VaultId:
     def relative_to(self, base_dir):
         source_path = self.source_path
         if source_path is not None:
-            return VaultId(label=self.label, source=source_path.relative_to(base_dir))
+            return VaultId(label=self.label, source=source_path.relative_to(base_dir), apply_realpath=False)
         else:
             return self.copy()
+
+    def __eq__(self, other):
+        if isinstance(other, VaultId):
+            return self.source == other.source and self.label == other.label
+        return False
 
     def __str__(self):
         return self.id
@@ -821,10 +834,10 @@ class Configurator:
 
         return dict_to_shell_vars(serialized_config, var_prefix=var_prefix, preprocess_var=preprocess_shell_var)
 
-    def get_ansible_user(self):
+    def get_ansible_user(self) -> Optional[str]:
         return self._config.ansible.user
 
-    def set_ansible_user(self, value):
+    def set_ansible_user(self, value: Optional[str]):
         self._config.ansible.user = value
 
     def get_ansible_private_key_file(self):
@@ -869,7 +882,7 @@ class Configurator:
         return self._config.ansible.vault_ids
 
     def set_ansible_vault_ids(self, value):
-        self._config.ansible.vault_ids = [VaultId(i) for i in to_list(value)]
+        self._config.ansible.vault_ids = [(VaultId(i) if not isinstance(i, VaultId) else i) for i in to_list(value) if i]
 
     def get_ansible_vault_encrypt_identity(self):
         return self._config.ansible.vault_encrypt_identity
@@ -986,6 +999,29 @@ class Configurator:
         LOG.debug("ansible-vault result: %s", result)
         return result
 
+def process_list_args(set_args: List, add_args: List, remove_args: List, config_get_values_func, value_class=str):
+    new_values: Optional[List[str]] = None
+    if set_args or remove_args or add_args:
+        old_values = [str_or_none(i) for i in config_get_values_func()]
+        if set_args:
+            new_values = set_args
+        else:
+            new_values = old_values[:]
+        for item in remove_args:
+            if item in new_values:
+                new_values.remove(item)
+            else:
+                _item = str(value_class(item))
+                if _item in new_values:
+                    new_values.remove(_item)
+        for item in add_args:
+            _item = str(value_class(item))
+            if item not in new_values and _item not in new_values:
+                new_values.append(item)
+        if new_values == old_values:
+            new_values = None
+    return new_values
+
 
 def main():
     # show_config = False
@@ -1039,9 +1075,9 @@ def main():
     parser.add_argument(
         "--pwgen", metavar="FILE", dest="pwd_file", help="generate random password, store to file and exit"
     )
-    parser.add_argument("-u", "--user", help="set remote user")
+    parser.add_argument("-u", "--user", default=None, help="set remote user")
     parser.add_argument("-r", "--reconfigure", help="reconfigure", action="store_true")
-    parser.add_argument("-k", "--private-key", help="set private key filename")
+    parser.add_argument("-k", "--private-key", default=None, dest="private_key", help="set private key filename")
     parser.add_argument(
         "--shell-config",
         help="print configuration variables in Bash-compatible script format and exit",
@@ -1201,66 +1237,32 @@ def main():
         return args.func(config=config, args=args)
 
     if not args.inventory:
-        args.inventory = config.get_ansible_inventories()
+        args.inventory = [str(i) for i in config.get_ansible_inventories()]
 
-    if not args.vars_files:
-        args.vars_files = config.get_ansible_vars_files()
-    if args.remove_vars_files:
-        for item in args.remove_vars_files:
-            if item in args.vars_files:
-                args.vars_files.remove(item)
-    if args.add_vars_files:
-        for item in args.add_vars_files:
-            if item not in args.vars_files:
-                args.vars_files.append(item)
+    new_vars_files = process_list_args(
+        args.vars_files, args.add_vars_files, args.remove_vars_files,
+        config.get_ansible_vars_files, realpath_if)
 
-    if not args.vault_files:
-        args.vault_files = config.get_ansible_vault_files()
-    if args.remove_vault_files:
-        for item in args.remove_vault_files:
-            if item in args.vault_files:
-                args.vault_files.remove(item)
-    if args.add_vault_files:
-        for item in args.add_vault_files:
-            if item not in args.vault_files:
-                args.vault_files.append(item)
+    new_vault_files = process_list_args(
+        args.vault_files, args.add_vault_files, args.remove_vault_files,
+        config.get_ansible_vault_files, realpath_if)
 
-    if not args.user:
-        args.user = config.get_ansible_user()
-    if not args.private_key:
-        args.private_key = config.get_ansible_private_key_file()
-    if not args.vault_password_files:
-        args.vault_password_files = config.get_ansible_vault_password_files()
-    if args.remove_vault_password_files:
-        for item in args.remove_vault_password_files:
-            if item in args.vault_password_files:
-                args.vault_password_files.remove(item)
-    if args.add_vault_password_files:
-        for item in args.add_vault_password_files:
-            if item not in args.vault_password_files:
-                args.vault_password_files.append(item)
+    if args.user is None:
+        args.user = str_or_none(config.get_ansible_user())
+    if args.private_key is None:
+        args.private_key = str_or_none(config.get_ansible_private_key_file())
 
-    if not args.vault_ids:
-        args.vault_ids = config.get_ansible_vault_ids()
-    if args.remove_vault_ids:
-        for item in args.remove_vault_ids:
-            if item in args.vault_ids:
-                args.vault_ids.remove(item)
-    if args.add_vault_ids:
-        for item in args.add_vault_ids:
-            if item not in args.vault_ids:
-                args.vault_ids.append(item)
+    new_vault_password_files = process_list_args(
+        args.vault_password_files, args.add_vault_password_files, args.remove_vault_password_files,
+        config.get_ansible_vault_password_files, realpath_if)
 
-    if not args.user_scripts:
-        args.user_scripts = config.get_ansible_user_scripts()
-    if args.remove_user_scripts:
-        for item in args.remove_user_scripts:
-            if item in args.user_scripts:
-                args.user_scripts.remove(item)
-    if args.add_user_scripts:
-        for item in args.add_user_scripts:
-            if item not in args.user_scripts:
-                args.user_scripts.append(item)
+    new_vault_ids = process_list_args(
+        args.vault_ids, args.add_vault_ids, args.remove_vault_ids,
+        config.get_ansible_vault_ids, VaultId)
+
+    new_user_scripts = process_list_args(
+        args.user_scripts, args.add_user_scripts, args.remove_user_scripts,
+        config.get_ansible_user_scripts, realpath_if)
 
     if args.default_vault_encrypt_id is None:
         args.default_vault_encrypt_id = config.get_ansible_vault_encrypt_identity()
@@ -1313,52 +1315,54 @@ def main():
             with open(found_file_name, "w") as pwd_file:
                 pwd_file.write(randpw())
 
-    if args.user:
-        config.set_ansible_user(args.user)
-    elif args.reconfigure:
+    if args.reconfigure:
         if args.read_only:
             LOG.error("Reconfiguration cannot be performed in read-only mode")
             return 1
-        user = rlinput("Remote (SSH) user name: ", config.get_ansible_user())
-        config.set_ansible_user(user)
+        user = rlinput("Ansible user name: ", config.get_ansible_user())
+        args.user = user
 
-    LOG.info("Ansible user set to %r", config.get_ansible_user())
+    if args.user != str_or_none(config.get_ansible_user()):
+        config.set_ansible_user(args.user)
+        LOG.info("Ansible user set to %r", config.get_ansible_user())
 
-    if args.private_key:
+    if args.private_key != str_or_none(config.get_ansible_private_key_file()):
         config.set_ansible_private_key_file(args.private_key)
         LOG.info("Set ansible private key file to %r", args.private_key)
 
-    if args.inventory:
-        if array_realpath_if(args.inventory) != [str(i) for i in config.get_ansible_inventories()]:
-            config.set_ansible_inventories(args.inventory)
-            LOG.info("Set ansible inventory file(s) to %s", ", ".join(map(str, args.inventory)))
+    if array_realpath_if(args.inventory) != [str_or_none(i) for i in config.get_ansible_inventories()]:
+        config.set_ansible_inventories(args.inventory)
+        LOG.info("Set ansible inventory file(s) to %s", ", ".join(map(str, args.inventory)))
 
-    if args.vault_password_files:
-        if array_realpath_if(args.vault_password_files) != [str(i) for i in config.get_ansible_vault_password_files()]:
-            config.set_ansible_vault_password_files(args.vault_password_files)
-            LOG.info("Set ansible vault password files to %r", args.vault_password_files)
+    if new_vault_password_files is not None:
+        config.set_ansible_vault_password_files(new_vault_password_files)
+        LOG.info("Set ansible vault password files to %r", new_vault_password_files)
 
-    if args.vault_files:
-        if array_realpath_if(args.vault_files) != [str(i) for i in config.get_ansible_vault_files()]:
-            config.set_ansible_vault_files(args.vault_files)
-            LOG.info("Set user's ansible vault files to %r", args.vault_files)
+    if new_vault_ids is not None:
+        config.set_ansible_vault_ids(new_vault_ids)
+        LOG.info("Set ansible vault ids to %r", new_vault_ids)
 
-    if args.vars_files:
-        if array_realpath_if(args.vars_files) != [str(i) for i in config.get_ansible_vars_files()]:
-            config.set_ansible_vars_files(args.vars_files)
-            LOG.info("Set user's ansible vars files to %r", args.vars_files)
+    if new_user_scripts is not None:
+        config.set_ansible_user_scripts(new_user_scripts)
+        LOG.info("Set ansible user scripts to %r", new_user_scripts)
 
-    if args.default_vault_encrypt_id is not None:
-        if args.default_vault_encrypt_id != config.get_ansible_vault_encrypt_identity():
-            config.set_ansible_vault_encrypt_identity(
-                args.default_vault_encrypt_id if args.default_vault_encrypt_id else None
-            )
-            LOG.info("Set default ansible encrypt identity to %r", config.get_ansible_vault_encrypt_identity())
+    if new_vars_files is not None:
+        config.set_ansible_vars_files(new_vars_files)
+        LOG.info("Set user's ansible vars files to %r", new_vars_files)
 
-    if args.default_log_path is not None:
-        if args.default_log_path != config.get_ansible_log_path():
-            config.set_ansible_log_path(args.default_log_path if args.default_log_path else None)
-            LOG.info("Set default ansible log path to %r", config.get_ansible_log_path())
+    if new_vault_files is not None:
+        config.set_ansible_vault_files(new_vault_files)
+        LOG.info("Set user's ansible vault files to %r", new_vault_files)
+
+    if args.default_vault_encrypt_id != str_or_none(config.get_ansible_vault_encrypt_identity()):
+        config.set_ansible_vault_encrypt_identity(
+            args.default_vault_encrypt_id if args.default_vault_encrypt_id else None
+        )
+        LOG.info("Set default ansible encrypt identity to %r", config.get_ansible_vault_encrypt_identity())
+
+    if args.default_log_path != str_or_none(config.get_ansible_log_path()):
+        config.set_ansible_log_path(args.default_log_path if args.default_log_path else None)
+        LOG.info("Set default ansible log path to %r", config.get_ansible_log_path())
 
     if args.reconfigure:
         if args.read_only:
