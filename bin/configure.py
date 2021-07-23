@@ -3,7 +3,6 @@
 """Ansible configurator"""
 
 import collections.abc
-import collections.abc
 import getpass
 import logging
 import os.path
@@ -383,10 +382,12 @@ REPLACE_VARS_MERGE_ACTION = '$replace_vars'
 class AttrMerger:
 
     def __init__(self, merge_options: Optional[Mapping[str, str]] = None):
+        if not merge_options:
+            merge_options = {}
         self.merge_options = merge_options
         self.replace_vars = set(merge_options.get(REPLACE_VARS_MERGE_ACTION, []))
         self.cur_attr_name = ''
-        self.attr_name_stack = []
+        self.attr_name_stack: List[str] = []
 
     def begin_attr(self, name: str):
         self.attr_name_stack.append(self.cur_attr_name)
@@ -523,7 +524,7 @@ class AnsibleConfigSchema(BaseSchema):
     vars_files = fields.List(PathField, required=False)
     vault_files = fields.List(PathField, required=False)
     private_key_file = PathField(required=False, allow_none=True)
-    user: fields.String(required=False, allow_none=True)
+    user = fields.String(required=False, allow_none=True)
     vault_encrypt_identity = fields.String(required=False, allow_none=True)
     log_path = PathField(required=False, allow_none=True)
 
@@ -882,7 +883,8 @@ class Configurator:
         return self._config.ansible.vault_ids
 
     def set_ansible_vault_ids(self, value):
-        self._config.ansible.vault_ids = [(VaultId(i) if not isinstance(i, VaultId) else i) for i in to_list(value) if i]
+        self._config.ansible.vault_ids = [(VaultId(i) if not isinstance(i, VaultId) else i) for i in to_list(value) if
+                                          i]
 
     def get_ansible_vault_encrypt_identity(self):
         return self._config.ansible.vault_encrypt_identity
