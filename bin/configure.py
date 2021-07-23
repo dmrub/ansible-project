@@ -15,8 +15,7 @@ import string
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from typing import Any
-from typing import Optional, Mapping, List
+from typing import Any, Optional, Mapping, List, Dict, Callable
 
 import yaml
 from marshmallow import Schema, fields, post_load, post_dump  # type: ignore
@@ -90,13 +89,14 @@ def to_shell_var_name(s):
     return s.upper()
 
 
-def dict_to_shell_vars(dict_value, var_prefix="", preprocess_var=None):
+def dict_to_shell_vars(dict_value, var_prefix="", export_vars=False, preprocess_var=None):
     assert isinstance(dict_value, dict)
     result = []
     for key, value in dict_value.items():
         var_name = var_prefix + to_shell_var_name(key)
         if isinstance(value, dict):
-            result.extend(dict_to_shell_vars(value, var_name + "_", preprocess_var=preprocess_var))
+            result.extend(dict_to_shell_vars(value, var_name + "_", export_vars=export_vars,
+                                             preprocess_var=preprocess_var))
         else:
             if preprocess_var is not None:
                 value, shell_commands = preprocess_var(var_name, value)
@@ -110,7 +110,10 @@ def dict_to_shell_vars(dict_value, var_prefix="", preprocess_var=None):
             else:
                 var_value = "{}={}".format(var_name, shlex.quote(str(value)))
             if var_value is not None:
-                result.append(var_value)
+                if export_vars:
+                    result.append("export "+var_value)
+                else:
+                    result.append(var_value)
     return result
 
 
@@ -425,11 +428,12 @@ class AnsibleConfig:
     user: Optional[str] = None
     vault_encrypt_identity: Optional[str] = None
     log_path: Optional[pathlib.Path] = None
+    env_vars: Dict[str, Any] = field(default_factory=dict)
 
     def merge(self, other: 'AnsibleConfig', attr_merger: AttrMerger):
         self.config_file = other.config_file
         for attr_name in ('inventories', 'vault_ids', 'vault_password_files',
-                          'user_scripts', 'vars_files', 'vault_files'):
+                          'user_scripts', 'vars_files', 'vault_files', 'env_vars'):
             attr_merger.merge_attr(self, other, attr_name)
         self.private_key_file = other.private_key_file
         self.user = other.user
@@ -527,6 +531,7 @@ class AnsibleConfigSchema(BaseSchema):
     user = fields.String(required=False, allow_none=True)
     vault_encrypt_identity = fields.String(required=False, allow_none=True)
     log_path = PathField(required=False, allow_none=True)
+    env_vars = fields.Dict(keys=fields.Str(), values=fields.Str())
 
 
 class MainConfigSchema(BaseSchema):
@@ -802,6 +807,9 @@ class Configurator:
             config_file=self._config.config_context.config_file, serialize_relative_paths=False
         )
         serialized_config = schema.dump(self._config)
+        # Process ansible.env_vars differently
+        env_vars_config = serialized_config.get('ansible', {}).pop('env_vars', None)
+        env_vars = dict_to_shell_vars(env_vars_config, var_prefix='', export_vars=True)
 
         inventory_dirs = self.get_ansible_inventory_dirs(path_separator_at_end=True)
 
@@ -833,7 +841,7 @@ class Configurator:
                 value = valid_filenames if len(valid_filenames) > 0 else None
             return value, shell_commands
 
-        return dict_to_shell_vars(serialized_config, var_prefix=var_prefix, preprocess_var=preprocess_shell_var)
+        return dict_to_shell_vars(serialized_config, var_prefix=var_prefix, preprocess_var=preprocess_shell_var)+env_vars
 
     def get_ansible_user(self) -> Optional[str]:
         return self._config.ansible.user
@@ -930,6 +938,12 @@ class Configurator:
     def set_ansible_user_scripts(self, value):
         self._config.ansible.user_scripts = [pathlib.Path(p) for p in to_abspath_list(value)]
 
+    def get_ansible_env_vars(self):
+        return self._config.ansible.env_vars
+
+    def set_ansible_env_vars(self, value):
+        self._config.ansible.env_vars = {str(k): v for k, v in value.items()}
+
     def print_info(self):
         indent = " " * 38
         delim = ",\n" + indent
@@ -946,6 +960,7 @@ class Configurator:
     Ansible default vault encrypt id: {ansible_vault_encrypt_identity}
     Ansible remote user:              {ansible_remote_user}
     Ansible private SSH key file:     {ansible_private_key_file}
+    Ansible environment vars:         {ansible_env_vars}
     User's ansible vars file(s):      {ansible_vars_files}
     User's ansible vault file(s):     {ansible_vault_files}
     User scripts:                     {ansible_user_scripts}
@@ -962,6 +977,7 @@ class Configurator:
                 ansible_vars_files=delim.join(map(str, self.get_ansible_vars_files())),
                 ansible_vault_files=delim.join(map(str, self.get_ansible_vault_files())),
                 ansible_user_scripts=delim.join(map(str, self.get_ansible_user_scripts())),
+                ansible_env_vars=delim.join(("{}: {}".format(k, v) for k, v in self.get_ansible_env_vars().items()))
             )
         )
 
@@ -1001,10 +1017,11 @@ class Configurator:
         LOG.debug("ansible-vault result: %s", result)
         return result
 
-def process_list_args(set_args: List, add_args: List, remove_args: List, config_get_values_func, value_class=str):
-    new_values: Optional[List[str]] = None
+
+def process_list_args(set_args: List, add_args: List, remove_args: List, config_get_values_func, value_class: Callable = str):
+    new_values: Optional[List[Optional[str]]] = None
     if set_args or remove_args or add_args:
-        old_values = [str_or_none(i) for i in config_get_values_func()]
+        old_values: List[Optional[str]] = [str_or_none(i) for i in config_get_values_func()]
         if set_args:
             new_values = set_args
         else:
@@ -1025,6 +1042,29 @@ def process_list_args(set_args: List, add_args: List, remove_args: List, config_
     return new_values
 
 
+def process_kvlist_args(set_args: List, add_args: List, remove_args: List, config_get_values_func,
+                        value_class: Callable = str):
+    new_values: Optional[Dict[str, Any]] = None
+    if set_args or remove_args or add_args:
+        old_values: dict = config_get_values_func()
+        if set_args:
+            new_values = {str(k):str(v) for k,v in set_args}
+        else:
+            new_values = old_values.copy()
+        for key in remove_args:
+            if key in new_values:
+                del new_values[key]
+            else:
+                _key = str(value_class(key))
+                if _key in new_values:
+                    del new_values[_key]
+        for key, value in add_args:
+            new_values[key] = value
+        if new_values == old_values:
+            new_values = None
+    return new_values
+
+
 def main():
     # show_config = False
     # logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',
@@ -1037,6 +1077,57 @@ def main():
     #     print(s)
 
     import argparse
+    import copy
+
+    def ensure_value(namespace, name, value):
+        if getattr(namespace, name, None) is None:
+            setattr(namespace, name, value)
+        return getattr(namespace, name)
+
+    class AppendKeyValue(argparse.Action):
+
+        def __init__(self,
+                     option_strings,
+                     dest,
+                     nargs=None,
+                     const=None,
+                     default=None,
+                     type=None,
+                     choices=None,
+                     required=False,
+                     help=None,
+                     metavar=None):
+            if nargs == 0:
+                raise ValueError('nargs for append actions must be > 0; if arg '
+                                 'strings are not supplying the value to append, '
+                                 'the append const action may be more appropriate')
+            if const is not None and nargs != argparse.OPTIONAL:
+                raise ValueError('nargs must be %r to supply const' % argparse.OPTIONAL)
+            super(AppendKeyValue, self).__init__(
+                option_strings=option_strings,
+                dest=dest,
+                nargs=nargs,
+                const=const,
+                default=default,
+                type=type,
+                choices=choices,
+                required=required,
+                help=help,
+                metavar=metavar)
+
+        def __call__(self, parser, namespace, values, option_string=None):
+            kv = values.split('=', 1)
+            if len(kv) == 1:
+                kv.append('')
+
+            items = copy.copy(ensure_value(namespace, self.dest, []))
+            items.append(kv)
+            setattr(namespace, self.dest, items)
+
+    class StoreNameValuePair(argparse.Action):
+        def __call__(self, parser, namespace, values, option_string=None):
+            n, v = values.split('=')
+            setattr(namespace, n, v)
 
     parser = argparse.ArgumentParser(description="Ansible configurator")
     parser.add_argument(
@@ -1116,6 +1207,16 @@ def main():
     parser.add_argument(
         "--remove-vault-id", default=[], dest="remove_vault_ids", help="remove vault IDs", action="append"
     )
+    parser.add_argument("--env-var", default=[], dest="env_vars", metavar="VAR=VALUE", help="environment variable",
+                        action=AppendKeyValue)
+    parser.add_argument("--add-env-var", default=[], dest="add_env_vars", metavar="VAR=VALUE",
+                        help="add environment variable",
+                        action=AppendKeyValue)
+    parser.add_argument(
+        "--remove-env-var", default=[], dest="remove_env_vars", metavar="VAR", help="remove environment variable",
+        action="append"
+    )
+
     parser.add_argument("--user-script", default=[], dest="user_scripts", help="user script", action="append")
     parser.add_argument(
         "--add-user-script", default=[], dest="add_user_scripts", help="add user scripts", action="append"
@@ -1262,6 +1363,11 @@ def main():
         args.vault_ids, args.add_vault_ids, args.remove_vault_ids,
         config.get_ansible_vault_ids, VaultId)
 
+    new_env_vars = process_kvlist_args(
+        args.env_vars, args.add_env_vars, args.remove_env_vars,
+        config.get_ansible_env_vars
+    )
+
     new_user_scripts = process_list_args(
         args.user_scripts, args.add_user_scripts, args.remove_user_scripts,
         config.get_ansible_user_scripts, realpath_if)
@@ -1343,6 +1449,10 @@ def main():
     if new_vault_ids is not None:
         config.set_ansible_vault_ids(new_vault_ids)
         LOG.info("Set ansible vault ids to %r", new_vault_ids)
+
+    if new_env_vars is not None:
+        config.set_ansible_env_vars(new_env_vars)
+        LOG.info("Set ansible environment vars to %r", new_env_vars)
 
     if new_user_scripts is not None:
         config.set_ansible_user_scripts(new_user_scripts)
