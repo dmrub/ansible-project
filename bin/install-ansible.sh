@@ -208,9 +208,11 @@ install_dependencies() {
     ubuntu)
 
         (
-            set -x
-            apt-get update -y
-            apt-get install -y --no-install-recommends python3-minimal python3-pip python3-venv git openssh-client gnupg pinentry-tty sshpass
+            if ! is_dry_run; then
+                set -x
+            fi
+            $sh_c 'apt-get update -qq >/dev/null'
+            $sh_c 'apt-get install -y --no-install-recommends python3-minimal python3-pip python3-venv git openssh-client gnupg pinentry-tty sshpass'
         )
         ;;
     debian | raspbian)
