@@ -1,6 +1,8 @@
 #!/bin/sh
 set -e
 
+THIS_DIR=$(cd "$(dirname -- "$0")" && pwd -P)
+
 # Ansible installation script
 # Based on https://github.com/docker/docker-install/blob/master/install.sh
 # Apache License 2.0
@@ -305,14 +307,17 @@ usage() {
     echo "  -p, --proj-dir proj_dir      Project directory"
     echo "  -e, --venv-dir venv_dir      Virtual environment directory"
     echo "  -n, --dry-run                Don't actually install anything, just print commands"
+    echo "      --install-dependencies   Install only system-wide dependencies"
     echo "      --dont-install-dependencies"
-    echo "                               Don't install system-wide dependencies"
+    echo "                               Install everything, but no system-wide dependencies"
     echo "      --force                  Force installation of already installed components"
     echo "      --                       End of options"
 }
 
+DRY_RUN=
 VENV_DIR=
 NO_DEPENDENCIES=
+ONLY_DEPENDENCIES=
 FORCE=
 PROJ_DIR=
 
@@ -329,6 +334,10 @@ while [ $# -gt 0 ]; do
     -p | --proj-dir)
         PROJ_DIR="$2"
         shift 2
+        ;;
+    --install-dependencies)
+        ONLY_DEPENDENCIES=true
+        shift
         ;;
     --dont-install-dependencies)
         NO_DEPENDENCIES=true
@@ -355,122 +364,131 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ "$NO_DEPENDENCIES" != "true" ]; then
+if [ "$NO_DEPENDENCIES" = "true" ] && [ "$ONLY_DEPENDENCIES" = "true" ]; then
+    fatal "You cannot specify the --install-dependencies and --dont-install-dependencies options at the same time"
+fi
+
+if [ "$ONLY_DEPENDENCIES" = "true" ]; then
+    message "Installing only system-wide dependencies"
     install_dependencies
 else
-    message "User disabled installation of dependencies"
-fi
+    if [ "$NO_DEPENDENCIES" != "true" ]; then
+        install_dependencies
+    else
+        message "User disabled installation of dependencies"
+    fi
 
-if [ -z "$PROJ_DIR" ]; then
-    for p in "$PWD" "$PWD/.."; do
-        if [ -e "$p/requirements.txt" ]; then
-            PROJ_DIR=$p
-            break
-        fi
-    done
-fi
+    if [ -z "$PROJ_DIR" ]; then
+        for p in "$THIS_DIR" "$THIS_DIR/.."; do
+            if [ -e "$p/requirements.txt" ]; then
+                PROJ_DIR=$p
+                break
+            fi
+        done
+    fi
 
-if [ -z "$PROJ_DIR" ]; then
-    fatal "The project directory was not specified and also not found automatically"
-fi
+    if [ -z "$PROJ_DIR" ]; then
+        fatal "The project directory was not specified and also not found automatically"
+    fi
 
-if [ ! -e "$PROJ_DIR/requirements.txt" ]; then
-    fatal "No requirements.txt file found in the project directory: $PROJ_DIR"
-fi
+    if [ ! -e "$PROJ_DIR/requirements.txt" ]; then
+        fatal "No requirements.txt file found in the project directory: $PROJ_DIR"
+    fi
 
-if [ -z "$VENV_DIR" ]; then
-    VENV_DIR=$PROJ_DIR/venv
-fi
+    if [ -z "$VENV_DIR" ]; then
+        VENV_DIR=$PROJ_DIR/venv
+    fi
 
-message "Project directory: $PROJ_DIR"
-message "Virtual environment directory: $VENV_DIR"
+    message "Project directory: $PROJ_DIR"
+    message "Virtual environment directory: $VENV_DIR"
 
-sh_c='sh -c'
-if is_dry_run; then
-    sh_c="echo"
-fi
-
-# Install virtualenv module
-if ! python3 -m venv --help >/dev/null; then
-    (
-        if ! is_dry_run; then
-            set -x
-        fi
-        $sh_c 'python3 -m pip install --user virtualenv'
-    )
-fi
-
-# Create virtualenv
-if [ ! -e "$VENV_DIR/bin/activate" ]; then
-    VENV_PARENT_DIR=$(dirname -- "$VENV_DIR")
-    VENV_BN=$(basename -- "$VENV_DIR")
+    sh_c='sh -c'
     if is_dry_run; then
-        echo mkdir -p "$VENV_PARENT_DIR"
-        echo cd "$VENV_PARENT_DIR"
-        echo python3 -m venv "$VENV_BN"
+        sh_c="echo"
+    fi
+
+    # Install virtualenv module
+    if ! python3 -m venv --help >/dev/null; then
+        (
+            if ! is_dry_run; then
+                set -x
+            fi
+            $sh_c 'python3 -m pip install --user virtualenv'
+        )
+    fi
+
+    # Create virtualenv
+    if [ ! -e "$VENV_DIR/bin/activate" ]; then
+        VENV_PARENT_DIR=$(dirname -- "$VENV_DIR")
+        VENV_BN=$(basename -- "$VENV_DIR")
+        if is_dry_run; then
+            echo mkdir -p "$VENV_PARENT_DIR"
+            echo cd "$VENV_PARENT_DIR"
+            echo python3 -m venv "$VENV_BN"
+            echo . "$VENV_DIR/bin/activate"
+            echo python3 -m pip install --upgrade pip
+            echo deactivate
+        else
+            (
+                set -x
+                mkdir -p "$VENV_PARENT_DIR"
+                cd "$VENV_PARENT_DIR"
+                python3 -m venv "$VENV_BN"
+            )
+            (
+                # shellcheck disable=SC1091
+                . "$VENV_DIR/bin/activate"
+                set -x
+                python3 -m pip install --upgrade pip
+            )
+        fi
+    fi
+
+    # Install requirements
+    if is_dry_run; then
         echo . "$VENV_DIR/bin/activate"
-        echo python3 -m pip install --upgrade pip
+        echo python3 -m pip install -r "$PROJ_DIR/requirements.txt"
+        if is_darwin; then
+            echo python3 -m pip install passlib
+        fi
         echo deactivate
     else
         (
-            set -x
-            mkdir -p "$VENV_PARENT_DIR"
-            cd "$VENV_PARENT_DIR"
-            python3 -m venv "$VENV_BN"
-        )
-        (
             # shellcheck disable=SC1091
             . "$VENV_DIR/bin/activate"
             set -x
-            python3 -m pip install --upgrade pip
-        )
-    fi
-fi
-
-# Install requirements
-if is_dry_run; then
-    echo . "$VENV_DIR/bin/activate"
-    echo python3 -m pip install -r "$PROJ_DIR/requirements.txt"
-    if is_darwin; then
-        echo python3 -m pip install passlib
-    fi
-    echo deactivate
-else
-    (
-        # shellcheck disable=SC1091
-        . "$VENV_DIR/bin/activate"
-        set -x
-        python3 -m pip install -r "$PROJ_DIR/requirements.txt"
-        set +x
-        if is_darwin; then
-            set -x
-            python3 -m pip install passlib
+            python3 -m pip install -r "$PROJ_DIR/requirements.txt"
             set +x
-        fi
-    )
-fi
-
-# Install ansible requirements
-if [ -e "$PROJ_DIR/requirements.yml" ]; then
-    if [ "$FORCE" = "true" ]; then
-        FORCE_INSTALL_ARG="--force"
-    else
-        FORCE_INSTALL_ARG=""
-    fi
-    if is_dry_run; then
-        echo . "$VENV_DIR/bin/activate"
-        echo "ansible-galaxy collection install ${FORCE_INSTALL_ARG} -r \"$PROJ_DIR/requirements.yml\""
-    else
-        (
-            # shellcheck disable=SC1091
-            . "$VENV_DIR/bin/activate"
-            set -x
-            # shellcheck disable=SC2086
-            ansible-galaxy collection install ${FORCE_INSTALL_ARG} -r "$PROJ_DIR/requirements.yml"
-            # shellcheck disable=SC2086
-            ansible-galaxy role install ${FORCE_INSTALL_ARG} -r "$PROJ_DIR/requirements.yml"
+            if is_darwin; then
+                set -x
+                python3 -m pip install passlib
+                set +x
+            fi
         )
     fi
-fi
 
-message "Finished installation of requirements"
+    # Install ansible requirements
+    if [ -e "$PROJ_DIR/requirements.yml" ]; then
+        if [ "$FORCE" = "true" ]; then
+            FORCE_INSTALL_ARG="--force"
+        else
+            FORCE_INSTALL_ARG=""
+        fi
+        if is_dry_run; then
+            echo . "$VENV_DIR/bin/activate"
+            echo "ansible-galaxy collection install ${FORCE_INSTALL_ARG} -r \"$PROJ_DIR/requirements.yml\""
+        else
+            (
+                # shellcheck disable=SC1091
+                . "$VENV_DIR/bin/activate"
+                set -x
+                # shellcheck disable=SC2086
+                ansible-galaxy collection install ${FORCE_INSTALL_ARG} -r "$PROJ_DIR/requirements.yml"
+                # shellcheck disable=SC2086
+                ansible-galaxy role install ${FORCE_INSTALL_ARG} -r "$PROJ_DIR/requirements.yml"
+            )
+        fi
+    fi
+
+    message "Finished installation of requirements"
+fi
