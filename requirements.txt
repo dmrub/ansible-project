@@ -1,4 +1,7 @@
-ansible==2.9.21
+ansible==5.7.1
+ansible-core==2.12.5
+jinja2==2.11.3
+MarkupSafe==1.1.1
 netaddr
 pyyaml
 jmespath
