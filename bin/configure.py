@@ -478,7 +478,10 @@ class PathField(fields.String):
 
     def _deserialize(self, value, attr, data, **kwargs):
         svalue = super()._deserialize(value, attr, data, **kwargs)
-        return self.context.config_dir / os.path.expanduser(svalue)
+        expanded_svalue = os.path.expandvars(os.path.expanduser(svalue))
+        if not os.path.isabs(expanded_svalue):
+            return self.context.config_dir / expanded_svalue
+        return expanded_svalue
 
 
 class VaultIdField(fields.String):
@@ -498,7 +501,9 @@ class VaultIdField(fields.String):
         vault_id = VaultId(svalue)
         source_path = vault_id.source_path
         if source_path:
-            source_path = self.context.config_dir / os.path.expanduser(source_path)
+            source_path = os.path.expandvars(os.path.expanduser(source_path))
+            if not os.path.isabs(source_path):
+                source_path = self.context.config_dir / source_path
             vault_id.source = str(source_path)
         return vault_id
 
