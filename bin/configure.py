@@ -546,13 +546,16 @@ class MainConfigSchema(BaseSchema):
         return data
 
 
-def pwgen(pwd_file, pwd_length=20):
-    if os.path.exists(pwd_file):
+def pwgen(pwd_file: Optional[str], pwd_length=20):
+    if pwd_file and os.path.exists(pwd_file):
         LOG.error("File %s already exists", pwd_file)
         return False
     LOG.info("Generate password of length %s in the file %s", pwd_length, pwd_file)
-    with open(pwd_file, "w") as f:
-        f.write(randpw(pwd_length))
+    if pwd_file:
+        with open(pwd_file, "w") as f:
+            f.write(randpw(pwd_length))
+    else:
+        sys.stdout.write(randpw(pwd_length))
     return True
 
 
