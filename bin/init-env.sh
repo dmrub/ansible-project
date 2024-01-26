@@ -217,7 +217,7 @@ declare-callback pre-ansible
 load-script() {
     local script_file=$1 THIS_DIR
     # shellcheck disable=SC2034
-    THIS_DIR=$( (cd "$(dirname -- "${script_file}")" && pwd -P))
+    THIS_DIR=$(cd "$(dirname -- "${script_file}")" && pwd -P)
     # shellcheck disable=SC1090
     . "$script_file"
 

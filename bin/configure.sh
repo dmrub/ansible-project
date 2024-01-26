@@ -2,7 +2,7 @@
 
 set -eo pipefail
 
-THIS_DIR=$( (cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) )
+THIS_DIR=$( cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P )
 
 # BUGFIX: disabled this feature because for some configuration operations
 # environment variables defined in the configuration file must be defined.
