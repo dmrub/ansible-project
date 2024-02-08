@@ -451,6 +451,17 @@ run-ansible-console() {
     run-ansible-cmd ansible-console "$@"
 }
 
+run-ansible-lint() {
+    check-config
+
+    local opts
+    opts=()
+    add-inventories-to-opts
+    add-remote-user-to-opts
+
+    run-ansible-cmd ansible-lint "$@"
+}
+
 # $1 - filename
 # $2 - variable prefix, CFG_ is used by default
 read-config-file() {
