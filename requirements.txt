@@ -1,7 +1,7 @@
-ansible==5.7.1
-ansible-core==2.12.5
-jinja2==2.11.3
-MarkupSafe==1.1.1
+ansible
+ansible-core
+jinja2
+MarkupSafe==2.1.3
 netaddr
 pyyaml
 jmespath
@@ -11,3 +11,4 @@ requests
 yamllint
 ansible-lint[yamllint]
 marshmallow==3.10.0
+passlib
