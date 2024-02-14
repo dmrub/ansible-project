@@ -269,6 +269,8 @@ init-ansible
 if ! is-array CFG_ANSIBLE_INVENTORIES; then
     CFG_ANSIBLE_INVENTORIES=( )
 fi
+# shellcheck disable=SC2034
+ANSIBLE_LOCALHOST_INVENTORY=$PROJ_DIR/localhost_inventory/localhost.yml
 
 if ! is-array CFG_ANSIBLE_EXTRA_VARS; then
     CFG_ANSIBLE_EXTRA_VARS=()
