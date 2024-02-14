@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 set -eo pipefail
-export LC_ALL=C
+export LC_ALL=C.UTF-8
 unset CDPATH
 
 THIS_DIR=$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
