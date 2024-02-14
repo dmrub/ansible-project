@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # Copyright: (c) 2020, Dmitri Rubinstein
 # Apache 2.0 License, http://www.apache.org/licenses/
