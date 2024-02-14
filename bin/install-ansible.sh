@@ -35,6 +35,14 @@ is_dry_run() {
     fi
 }
 
+is_verbose() {
+    if [ -z "$VERBOSE" ]; then
+        return 1
+    else
+        return 0
+    fi
+}
+
 is_wsl() {
     case "$(uname -r)" in
     *microsoft*) true ;; # WSL 2
@@ -307,6 +315,7 @@ usage() {
     echo "  -p, --proj-dir proj_dir      Project directory"
     echo "  -e, --venv-dir venv_dir      Virtual environment directory"
     echo "  -n, --dry-run                Don't actually install anything, just print commands"
+    echo "  -v, --verbose                Increase verbosity"
     echo "      --install-dependencies   Install only system-wide dependencies"
     echo "      --dont-install-dependencies"
     echo "                               Install everything, but no system-wide dependencies"
@@ -315,6 +324,7 @@ usage() {
 }
 
 DRY_RUN=
+VERBOSE=
 VENV_DIR=
 NO_DEPENDENCIES=
 ONLY_DEPENDENCIES=
@@ -325,6 +335,10 @@ while [ $# -gt 0 ]; do
     case "$1" in
     -n | --dry-run)
         DRY_RUN=true
+        shift
+        ;;
+    -v | --verbose)
+        VERBOSE=true
         shift
         ;;
     -e | --venv-dir)
@@ -407,13 +421,19 @@ else
         sh_c="echo"
     fi
 
+    if is_verbose; then
+        pip_verbose=-v
+    else
+        pip_verbose=
+    fi
+
     # Install virtualenv module
     if ! python3 -m venv --help >/dev/null; then
         (
             if ! is_dry_run; then
                 set -x
             fi
-            $sh_c 'python3 -m pip install --user virtualenv'
+            $sh_c "python3 -m pip $pip_verbose install --user virtualenv"
         )
     fi
 
@@ -426,7 +446,7 @@ else
             echo cd "$VENV_PARENT_DIR"
             echo python3 -m venv "$VENV_BN"
             echo . "$VENV_DIR/bin/activate"
-            echo python3 -m pip install --upgrade pip
+            echo python3 -m pip $pip_verbose install --upgrade pip
             echo deactivate
         else
             (
@@ -439,7 +459,7 @@ else
                 # shellcheck disable=SC1091
                 . "$VENV_DIR/bin/activate"
                 set -x
-                python3 -m pip install --upgrade pip
+                python3 -m pip $pip_verbose install --upgrade pip
             )
         fi
     fi
@@ -447,9 +467,12 @@ else
     # Install requirements
     if is_dry_run; then
         echo . "$VENV_DIR/bin/activate"
-        echo python3 -m pip install -r "$PROJ_DIR/requirements.txt"
+        echo python3 -m pip $pip_verbose install -r "$PROJ_DIR/requirements.txt"
+        if [ -e "$PROJ_DIR/optional-requirements.txt" ]; then
+            echo python3 -m $pip_verbose pip install -r "$PROJ_DIR/optional-requirements.txt"
+        fi
         if is_darwin; then
-            echo python3 -m pip install passlib
+            echo python3 -m pip $pip_verbose install passlib
         fi
         echo deactivate
     else
@@ -457,11 +480,16 @@ else
             # shellcheck disable=SC1091
             . "$VENV_DIR/bin/activate"
             set -x
-            python3 -m pip install -r "$PROJ_DIR/requirements.txt"
+            python3 -m pip $pip_verbose install -r "$PROJ_DIR/requirements.txt"
             set +x
+            if [ -e "$PROJ_DIR/optional-requirements.txt" ]; then
+                set -x
+                python3 -m pip $pip_verbose install -r "$PROJ_DIR/optional-requirements.txt" || true;
+                set +x
+            fi
             if is_darwin; then
                 set -x
-                python3 -m pip install passlib
+                python3 -m pip $pip_verbose install passlib
                 set +x
             fi
         )
