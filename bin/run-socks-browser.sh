@@ -20,10 +20,11 @@ fatal() {
 usage() {
     echo "Run browser with connection via SOCKS tunnel to the remote host"
     echo
-    echo "$0 [options] [--] remote-host url"
+    echo "$0 [options] [--] remote-host [url]"
     echo "options:"
     echo "      -b, --browser BROWSER_PATH"
     echo "                             Use specified browser executable"
+    echo "      -l, --remote-localhost 127.0.0.1 and localhost should refer to the remote host"
     echo "      --help                 Display this help and exit"
     echo "      --                     End of options"
     echo ""
@@ -48,6 +49,8 @@ get_children_pids() {
     _get_children_pids "$pid" "$all_pids"
 }
 
+REMOTE_LOCALHOST=false
+
 while [[ "$1" == "-"* ]]; do
     case "$1" in
         -b|--browser)
@@ -56,6 +59,10 @@ while [[ "$1" == "-"* ]]; do
             ;;
         --browser=*)
             BROWSER="${1#*=}"
+            shift
+            ;;
+        -l|--remote-localhost)
+            REMOTE_LOCALHOST=true
             shift
             ;;
         --help)
@@ -116,7 +123,7 @@ if [[ ! -x "$BROWSER_EXEC" ]]; then
     fatal "Could not detect any supported browser executable !"
 fi
 
-BROWSER_BN=$(basename "$BROWSER_EXEC")
+BROWSER_BN=$(basename -- "$BROWSER_EXEC")
 
 case "$BROWSER_BN" in
     firefox)
@@ -132,11 +139,18 @@ esac
 
 case "$BROWSER_TYPE" in
     chromium)
+        if [[ "$REMOTE_LOCALHOST" = "true" ]]; then
+            ARGS=(--proxy-bypass-list="<-loopback>")
+        else
+            ARGS=()
+        fi
         set -x
         "$BROWSER_EXEC" \
             --user-data-dir="$TMPDIR" \
             --proxy-server="socks5://127.0.0.1:${LOCAL_PORT}" \
-            --host-resolver-rules="MAP * ~NOTFOUND , EXCLUDE 127.0.0.1" "$@" &
+            --host-resolver-rules="MAP * ~NOTFOUND , EXCLUDE 127.0.0.1" \
+            "${ARGS[@]}" \
+            "$@" &
         BROWSER_PID=$!
         set +x
         ;;
@@ -149,6 +163,7 @@ user_pref("network.predictor.cleaned-up", true);
 user_pref("network.proxy.socks", "127.0.0.1");
 user_pref("network.proxy.socks_port", ${LOCAL_PORT});
 user_pref("network.proxy.socks_remote_dns", true);
+user_pref("network.proxy.allow_hijacking_localhost", ${REMOTE_LOCALHOST});
 user_pref("network.proxy.type", 1);
 EOF
         set -x
